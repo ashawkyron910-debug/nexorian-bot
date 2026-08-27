@@ -82,6 +82,7 @@ client.once("ready", async () => {
 });
 
 client.on("interactionCreate", async interaction => {
+  console.log(`Interaction received: type=${interaction.type} customId=${interaction.customId || "-"} command=${interaction.commandName || "-"}`);
   if (interaction.isChatInputCommand()) {
     if (interaction.commandName === "redeem-key") {
       const modal = new ModalBuilder()
@@ -167,9 +168,10 @@ client.on("interactionCreate", async interaction => {
   }
 
   if (interaction.isModalSubmit() && interaction.customId === "redeem_key_modal") {
-    await interaction.deferReply({ ephemeral: true });
-
+    console.log("Redeem modal received; deferring reply...");
     try {
+      await interaction.deferReply({ ephemeral: true });
+      console.log("Redeem reply deferred.");
       const key = normalizeKey(interaction.fields.getTextInputValue("license_key"));
       const licenses = loadLicenses();
       const license = licenses[key];
