@@ -29,85 +29,7 @@ function saveLicenses(data) {
 }
 
 function normalizeKey(value) {
-  return value.trim();
-}
-
-async function keyAuthRequest(params) {
-  const url = new URL("https://keyauth.win/api/1.3/");
-  for (const [key, value] of Object.entries(params)) {
-    url.searchParams.set(key, String(value));
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000);
-
-  try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: { "User-Agent": "NEXORIAN.CC/1.0" },
-      signal: controller.signal
-    });
-
-    const text = await response.text();
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      throw new Error(`KeyAuth returned non-JSON response (HTTP ${response.status}).`);
-    }
-
-    return data;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function verifyKeyAuthLicense(key, discordUserId) {
-  const name = process.env.KEYAUTH_APP_NAME || process.env.KEYAUTH_NAME;
-  const ownerid = process.env.KEYAUTH_OWNER_ID || process.env.KEYAUTH_OWNERID;
-  const ver = process.env.KEYAUTH_APP_VERSION || process.env.KEYAUTH_VERSION || "1.0";
-
-  if (!name || !ownerid) {
-    throw new Error("KEYAUTH_APP_NAME and KEYAUTH_OWNER_ID must be set in .env");
-  }
-
-  // KeyAuth's free Client API requires initialization before license authentication.
-  const init = await keyAuthRequest({
-    type: "init",
-    ver,
-    name,
-    ownerid
-  });
-
-  if (!init.success || !init.sessionid) {
-    throw new Error(init.message || "KeyAuth initialization failed.");
-  }
-
-  // License-only authentication consumes the license and creates/validates
-  // the associated KeyAuth user, so the Discord user gets a one-time redemption.
-  const username = `discord_${discordUserId}`;
-  const password = crypto.randomBytes(24).toString("hex");
-
-  const result = await keyAuthRequest({
-    type: "register",
-    username,
-    pass: password,
-    key,
-    sessionid: init.sessionid,
-    name,
-    ownerid
-  });
-
-  console.log("KeyAuth register response:", {
-    success: Boolean(result.success),
-    message: result.message || null
-  });
-
-  return {
-    ok: Boolean(result.success),
-    message: result.message || "KeyAuth rejected the license.",
-    info: result.info
-  };
+  return value.trim().toUpperCase();
 }
 
 const client = new Client({
@@ -255,16 +177,12 @@ client.on("interactionCreate", async interaction => {
       return interaction.editReply("❌ You have already redeemed this key.");
     }
 
-    let authResult;
-    try {
-      authResult = await verifyKeyAuthLicense(key, interaction.user.id);
-    } catch (error) {
-      console.error("KeyAuth verification failed:", error);
-      return interaction.editReply("⚠️ KeyAuth verification is temporarily unavailable. Please try again.");
+    if (!license) {
+      return interaction.editReply("❌ Invalid license key.");
     }
 
-    if (!authResult.ok) {
-      return interaction.editReply(`❌ KeyAuth rejected that license: ${authResult.message}`);
+    if (license.redeemed >= license.uses) {
+      return interaction.editReply("❌ This license key has no uses remaining.");
     }
 
     const buyerRoleId = process.env.BUYER_ROLE_ID;
@@ -281,15 +199,9 @@ client.on("interactionCreate", async interaction => {
 
     await member.roles.add(role);
 
-    const localLicense = license || {
-      uses: 1,
-      redeemed: 0,
-      redeemedBy: []
-    };
-
-    localLicense.redeemed += 1;
-    localLicense.redeemedBy.push(interaction.user.id);
-    licenses[key] = localLicense;
+    license.redeemed += 1;
+    license.redeemedBy.push(interaction.user.id);
+    licenses[key] = license;
     saveLicenses(licenses);
 
     const embed = new EmbedBuilder()
