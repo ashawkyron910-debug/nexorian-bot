@@ -17,7 +17,7 @@ const {
   EmbedBuilder
 } = require("discord.js");
 
-const LICENSE_FILE = "./licenses.json";
+const LICENSE_FILE = require("path").join(__dirname, "licenses.json");
 
 function loadLicenses() {
   if (!fs.existsSync(LICENSE_FILE)) fs.writeFileSync(LICENSE_FILE, "{}");
@@ -140,7 +140,7 @@ client.on("interactionCreate", async interaction => {
       saveLicenses(licenses);
 
       return interaction.reply({
-        content: `🔑 Generated key: \`${key}\`\\nUses: **${uses}**`,
+        content: `🔑 Generated key: \`${key}\`\nUses: **${uses}**`,
         ephemeral: true
       });
     }
@@ -169,47 +169,64 @@ client.on("interactionCreate", async interaction => {
   if (interaction.isModalSubmit() && interaction.customId === "redeem_key_modal") {
     await interaction.deferReply({ ephemeral: true });
 
-    const key = normalizeKey(interaction.fields.getTextInputValue("license_key"));
-    const licenses = loadLicenses();
-    const license = licenses[key];
+    try {
+      const key = normalizeKey(interaction.fields.getTextInputValue("license_key"));
+      const licenses = loadLicenses();
+      const license = licenses[key];
 
-    if (license && license.redeemedBy.includes(interaction.user.id)) {
-      return interaction.editReply("❌ You have already redeemed this key.");
+      console.log(`Redeem attempt: key=${key}, found=${!!license}, user=${interaction.user.id}`);
+
+      if (!license) {
+        return interaction.editReply("❌ Invalid license key.");
+      }
+
+      if (license.redeemedBy.includes(interaction.user.id)) {
+        return interaction.editReply("❌ You have already redeemed this key.");
+      }
+
+      if (license.redeemed >= license.uses) {
+        return interaction.editReply("❌ This license key has no uses remaining.");
+      }
+
+      const buyerRoleId = process.env.BUYER_ROLE_ID;
+      if (!buyerRoleId) {
+        return interaction.editReply("⚠️ BUYER_ROLE_ID is not configured.");
+      }
+
+      if (!interaction.guild) {
+        return interaction.editReply("⚠️ This can only be redeemed inside a server.");
+      }
+
+      const member = await interaction.guild.members.fetch(interaction.user.id);
+      const role = await interaction.guild.roles.fetch(buyerRoleId);
+
+      if (!role) {
+        return interaction.editReply("⚠️ The configured Buyer role could not be found.");
+      }
+
+      if (!role.editable) {
+        return interaction.editReply("⚠️ I can't give the Buyer role. Move the Buyer role below my bot's highest role in Server Settings → Roles.");
+      }
+
+      await member.roles.add(role);
+
+      license.redeemed += 1;
+      license.redeemedBy.push(interaction.user.id);
+      saveLicenses(licenses);
+
+      const embed = new EmbedBuilder()
+        .setTitle("✅ Key Redeemed")
+        .setDescription(`Your license has been redeemed successfully. You received the **${role.name}** role.`)
+        .setFooter({ text: "NEXORIAN.CC" });
+
+      return interaction.editReply({ embeds: [embed] });
+    } catch (error) {
+      console.error("REDEEM ERROR:", error);
+      const message = error?.code === 50013
+        ? "⚠️ I don't have permission to give the Buyer role. Move the Buyer role below my bot's highest role."
+        : "⚠️ Something went wrong while redeeming the key. Check the bot logs.";
+      return interaction.editReply(message);
     }
-
-    if (!license) {
-      return interaction.editReply("❌ Invalid license key.");
-    }
-
-    if (license.redeemed >= license.uses) {
-      return interaction.editReply("❌ This license key has no uses remaining.");
-    }
-
-    const buyerRoleId = process.env.BUYER_ROLE_ID;
-    if (!buyerRoleId) {
-      return interaction.editReply("⚠️ BUYER_ROLE_ID is not configured.");
-    }
-
-    const member = await interaction.guild.members.fetch(interaction.user.id);
-    const role = await interaction.guild.roles.fetch(buyerRoleId);
-
-    if (!role) {
-      return interaction.editReply("⚠️ The configured Buyer role could not be found.");
-    }
-
-    await member.roles.add(role);
-
-    license.redeemed += 1;
-    license.redeemedBy.push(interaction.user.id);
-    licenses[key] = license;
-    saveLicenses(licenses);
-
-    const embed = new EmbedBuilder()
-      .setTitle("✅ Key Redeemed")
-      .setDescription(`Your license has been redeemed successfully. You received the **${role.name}** role.`)
-      .setFooter({ text: "NEXORIAN.CC" });
-
-    return interaction.editReply({ embeds: [embed] });
   }
 });
 
