@@ -33,21 +33,33 @@ function normalizeKey(value) {
 }
 
 async function keyAuthRequest(params) {
-  const response = await fetch("https://keyauth.win/api/1.3/", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams(params)
-  });
-
-  const text = await response.text();
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    throw new Error(`KeyAuth returned non-JSON response (HTTP ${response.status}).`);
+  const url = new URL("https://keyauth.win/api/1.3/");
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.set(key, String(value));
   }
 
-  return data;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { "User-Agent": "NEXORIAN.CC/1.0" },
+      signal: controller.signal
+    });
+
+    const text = await response.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(`KeyAuth returned non-JSON response (HTTP ${response.status}).`);
+    }
+
+    return data;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function verifyKeyAuthLicense(key, discordUserId) {
