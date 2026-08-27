@@ -29,7 +29,165 @@ function saveLicenses(data) {
 }
 
 function normalizeKey(value) {
-  return value.trim().toUpperCase();
+  return value.trim();
+}
+
+function authenticateKeyAuthShop(key, hwid) {
+  return new Promise((resolve, reject) => {
+    const projectId = process.env.KEYAUTH_PROJECT || process.env.KEYAUTH_PROJECT_ID;
+    if (!projectId) return reject(new Error("KEYAUTH_PROJECT is missing."));
+
+    const tls = require("tls");
+    const socket = tls.connect({
+      host: "socket.keyauth.shop",
+      port: 3389,
+      rejectUnauthorized: true,
+      servername: "socket.keyauth.shop"
+    });
+
+    let buffer = "";
+    let stage = "handshake";
+    let timer;
+
+    const finish = (result) => {
+      clearTimeout(timer);
+      try { socket.end(); } catch {}
+      resolve(result);
+    };
+
+    const fail = (error) => {
+      clearTimeout(timer);
+      try { socket.destroy(); } catch {}
+      reject(error);
+    };
+
+    timer = setTimeout(() => fail(new Error("KeyAuth Shop request timed out.")), 15000);
+
+    socket.once("error", fail);
+
+    socket.on("secureConnect", () => {
+      socket.write("2");
+      setTimeout(() => {
+        if (stage !== "handshake") return;
+        socket.write([projectId, key, hwid].join("|"));
+        stage = "auth";
+      }, 200);
+    });
+
+    socket.on("data", chunk => {
+      buffer += chunk.toString("utf8");
+
+      if (buffer.includes("CHALLENGE|")) {
+        const line = buffer.split(/\r?\n/).find(x => x.startsWith("CHALLENGE|")) || buffer;
+        const parts = line.split("|");
+        if (parts.length >= 3) {
+          const id = parts[1];
+          const nonce = parts[2];
+          const signature = crypto.createHmac("sha256", key).update(nonce).digest("hex");
+          socket.write(["RESPONSE", id, signature].join("|"));
+          buffer = "";
+        }
+        return;
+      }
+
+      if (buffer.includes("ACCESS|")) {
+        finish({ ok: true, raw: buffer });
+        return;
+      }
+
+      const lower = buffer.toLowerCase();
+      if (
+        lower.includes("invalid") ||
+        lower.includes("expired") ||
+        lower.includes("banned") ||
+        lower.includes("denied") ||
+        lower.includes("error")
+      ) {
+        finish({ ok: false, raw: buffer });
+      }
+    });
+  });
+}
+
+function normalizeKey(value) {
+  return value.trim();
+}
+
+function authenticateKeyAuthShop(key, hwid) {
+  return new Promise((resolve, reject) => {
+    const projectId = process.env.KEYAUTH_PROJECT || process.env.KEYAUTH_PROJECT_ID;
+    if (!projectId) return reject(new Error("KEYAUTH_PROJECT is missing."));
+
+    const tls = require("tls");
+    const socket = tls.connect({
+      host: "socket.keyauth.shop",
+      port: 3389,
+      rejectUnauthorized: true,
+      servername: "socket.keyauth.shop"
+    });
+
+    let buffer = "";
+    let stage = "handshake";
+    let timer;
+
+    const finish = (result) => {
+      clearTimeout(timer);
+      try { socket.end(); } catch {}
+      resolve(result);
+    };
+
+    const fail = (error) => {
+      clearTimeout(timer);
+      try { socket.destroy(); } catch {}
+      reject(error);
+    };
+
+    timer = setTimeout(() => fail(new Error("KeyAuth Shop request timed out.")), 15000);
+
+    socket.once("error", fail);
+
+    socket.on("secureConnect", () => {
+      socket.write("2");
+      setTimeout(() => {
+        if (stage !== "handshake") return;
+        socket.write([projectId, key, hwid].join("|"));
+        stage = "auth";
+      }, 200);
+    });
+
+    socket.on("data", chunk => {
+      buffer += chunk.toString("utf8");
+
+      if (buffer.includes("CHALLENGE|")) {
+        const line = buffer.split(/\r?\n/).find(x => x.startsWith("CHALLENGE|")) || buffer;
+        const parts = line.split("|");
+        if (parts.length >= 3) {
+          const id = parts[1];
+          const nonce = parts[2];
+          const signature = crypto.createHmac("sha256", key).update(nonce).digest("hex");
+          socket.write(["RESPONSE", id, signature].join("|"));
+          buffer = "";
+        }
+        return;
+      }
+
+      if (buffer.includes("ACCESS|")) {
+        finish({ ok: true, raw: buffer });
+        return;
+      }
+
+      const lower = buffer.toLowerCase();
+      if (
+        lower.includes("invalid") ||
+        lower.includes("expired") ||
+        lower.includes("banned") ||
+        lower.includes("denied") ||
+        lower.includes("error")
+      ) {
+        finish({ ok: false, raw: buffer });
+      }
+    });
+  });
 }
 
 const client = new Client({
@@ -173,16 +331,20 @@ client.on("interactionCreate", async interaction => {
     const licenses = loadLicenses();
     const license = licenses[key];
 
-    if (!license) {
-      return interaction.editReply("❌ That license key is invalid.");
-    }
-
-    if (license.redeemed >= license.uses) {
-      return interaction.editReply("❌ That license key has no uses remaining.");
-    }
-
-    if (license.redeemedBy.includes(interaction.user.id)) {
+    if (license && license.redeemedBy.includes(interaction.user.id)) {
       return interaction.editReply("❌ You have already redeemed this key.");
+    }
+
+    let authResult;
+    try {
+      authResult = await authenticateKeyAuthShop(key, interaction.user.id);
+    } catch (error) {
+      console.error("KeyAuth Shop verification failed:", error);
+      return interaction.editReply("⚠️ KeyAuth verification is temporarily unavailable. Please try again.");
+    }
+
+    if (!authResult.ok) {
+      return interaction.editReply("❌ That KeyAuth Shop license is invalid, expired, or denied.");
     }
 
     const buyerRoleId = process.env.BUYER_ROLE_ID;
@@ -199,8 +361,15 @@ client.on("interactionCreate", async interaction => {
 
     await member.roles.add(role);
 
-    license.redeemed += 1;
-    license.redeemedBy.push(interaction.user.id);
+    const localLicense = license || {
+      uses: 1,
+      redeemed: 0,
+      redeemedBy: []
+    };
+
+    localLicense.redeemed += 1;
+    localLicense.redeemedBy.push(interaction.user.id);
+    licenses[key] = localLicense;
     saveLicenses(licenses);
 
     const embed = new EmbedBuilder()
