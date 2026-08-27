@@ -254,12 +254,12 @@ client.on("interactionCreate", async interaction => {
     try {
       authResult = await verifyKeyAuthLicense(key, interaction.user.id);
     } catch (error) {
-      console.error("KeyAuth Shop verification failed:", error);
+      console.error("KeyAuth verification failed:", error);
       return interaction.editReply("⚠️ KeyAuth verification is temporarily unavailable. Please try again.");
     }
 
     if (!authResult.ok) {
-      return interaction.editReply("❌ That KeyAuth Shop license is invalid, expired, or denied.");
+      return interaction.editReply("❌ KeyAuth rejected that license. Check that it is valid and unused.");
     }
 
     const buyerRoleId = process.env.BUYER_ROLE_ID;
