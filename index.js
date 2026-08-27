@@ -98,6 +98,11 @@ async function verifyKeyAuthLicense(key, discordUserId) {
     ownerid
   });
 
+  console.log("KeyAuth register response:", {
+    success: Boolean(result.success),
+    message: result.message || null
+  });
+
   return {
     ok: Boolean(result.success),
     message: result.message || "KeyAuth rejected the license.",
@@ -259,7 +264,7 @@ client.on("interactionCreate", async interaction => {
     }
 
     if (!authResult.ok) {
-      return interaction.editReply("❌ KeyAuth rejected that license. Check that it is valid and unused.");
+      return interaction.editReply(`❌ KeyAuth rejected that license: ${authResult.message}`);
     }
 
     const buyerRoleId = process.env.BUYER_ROLE_ID;
