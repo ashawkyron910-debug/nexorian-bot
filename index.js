@@ -32,83 +32,66 @@ function normalizeKey(value) {
   return value.trim();
 }
 
-function authenticateKeyAuthShop(key, hwid) {
-  return new Promise((resolve, reject) => {
-    const projectId = process.env.KEYAUTH_PROJECT || process.env.KEYAUTH_PROJECT_ID;
-    if (!projectId) return reject(new Error("KEYAUTH_PROJECT is missing."));
-
-    const tls = require("tls");
-    const socket = tls.connect({
-      host: "socket.keyauth.shop",
-      port: 3389,
-      rejectUnauthorized: true,
-      servername: "socket.keyauth.shop"
-    });
-
-    let buffer = "";
-    let stage = "handshake";
-    let timer;
-
-    const finish = (result) => {
-      clearTimeout(timer);
-      try { socket.end(); } catch {}
-      resolve(result);
-    };
-
-    const fail = (error) => {
-      clearTimeout(timer);
-      try { socket.destroy(); } catch {}
-      reject(error);
-    };
-
-    timer = setTimeout(() => fail(new Error("KeyAuth Shop request timed out.")), 15000);
-
-    socket.once("error", fail);
-
-    socket.on("secureConnect", () => {
-      socket.write("2");
-      setTimeout(() => {
-        if (stage !== "handshake") return;
-        socket.write([projectId, key, hwid].join("|"));
-        stage = "auth";
-      }, 200);
-    });
-
-    socket.on("data", chunk => {
-      buffer += chunk.toString("utf8");
-
-      if (buffer.includes("CHALLENGE|")) {
-        const line = buffer.split(/\r?\n/).find(x => x.startsWith("CHALLENGE|")) || buffer;
-        const parts = line.split("|");
-        if (parts.length >= 3) {
-          const id = parts[1];
-          const nonce = parts[2];
-          const signature = crypto.createHmac("sha256", key).update(nonce).digest("hex");
-          socket.write(["RESPONSE", id, signature].join("|"));
-          buffer = "";
-        }
-        return;
-      }
-
-      if (buffer.includes("ACCESS|")) {
-        finish({ ok: true, raw: buffer });
-        return;
-      }
-
-      const lower = buffer.toLowerCase();
-      if (
-        lower.includes("invalid") ||
-        lower.includes("expired") ||
-        lower.includes("banned") ||
-        lower.includes("denied") ||
-        lower.includes("error")
-      ) {
-        finish({ ok: false, raw: buffer });
-      }
-    });
+async function keyAuthRequest(params) {
+  const response = await fetch("https://keyauth.win/api/1.3/", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(params)
   });
+
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`KeyAuth returned non-JSON response (HTTP ${response.status}).`);
+  }
+
+  return data;
 }
 
+async function verifyKeyAuthLicense(key, discordUserId) {
+  const name = process.env.KEYAUTH_APP_NAME || process.env.KEYAUTH_NAME;
+  const ownerid = process.env.KEYAUTH_OWNER_ID || process.env.KEYAUTH_OWNERID;
+  const ver = process.env.KEYAUTH_APP_VERSION || process.env.KEYAUTH_VERSION || "1.0";
+
+  if (!name || !ownerid) {
+    throw new Error("KEYAUTH_APP_NAME and KEYAUTH_OWNER_ID must be set in .env");
+  }
+
+  // KeyAuth's free Client API requires initialization before license authentication.
+  const init = await keyAuthRequest({
+    type: "init",
+    ver,
+    name,
+    ownerid
+  });
+
+  if (!init.success || !init.sessionid) {
+    throw new Error(init.message || "KeyAuth initialization failed.");
+  }
+
+  // License-only authentication consumes the license and creates/validates
+  // the associated KeyAuth user, so the Discord user gets a one-time redemption.
+  const username = `discord_${discordUserId}`;
+  const password = crypto.randomBytes(24).toString("hex");
+
+  const result = await keyAuthRequest({
+    type: "register",
+    username,
+    pass: password,
+    key,
+    sessionid: init.sessionid,
+    name,
+    ownerid
+  });
+
+  return {
+    ok: Boolean(result.success),
+    message: result.message || "KeyAuth rejected the license.",
+    info: result.info
+  };
+}
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
@@ -257,7 +240,7 @@ client.on("interactionCreate", async interaction => {
 
     let authResult;
     try {
-      authResult = await authenticateKeyAuthShop(key, interaction.user.id);
+      authResult = await verifyKeyAuthLicense(key, interaction.user.id);
     } catch (error) {
       console.error("KeyAuth Shop verification failed:", error);
       return interaction.editReply("⚠️ KeyAuth verification is temporarily unavailable. Please try again.");
