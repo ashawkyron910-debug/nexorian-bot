@@ -12,6 +12,8 @@ const {
   TextInputBuilder,
   TextInputStyle,
   ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   EmbedBuilder
 } = require("discord.js");
 
@@ -39,6 +41,10 @@ const commands = [
   new SlashCommandBuilder()
     .setName("redeem-key")
     .setDescription("Redeem a license key and receive the configured customer role."),
+  new SlashCommandBuilder()
+    .setName("setup-redeem")
+    .setDescription("Post the NEXORIAN.CC license redemption panel in this channel.")
+    .setDefaultMemberPermissions("8"),
   new SlashCommandBuilder()
     .setName("generate-key")
     .setDescription("Generate a new license key.")
@@ -69,7 +75,7 @@ client.once("ready", async () => {
       Routes.applicationGuildCommands(client.user.id, guildId),
       { body: commands }
     );
-    console.log("Registered /redeem-key and /generate-key.");
+    console.log("Registered /redeem-key, /setup-redeem, and /generate-key.");
   } catch (error) {
     console.error("Slash command registration failed:", error);
   }
@@ -97,6 +103,30 @@ client.on("interactionCreate", async interaction => {
       return interaction.showModal(modal);
     }
 
+    if (interaction.commandName === "setup-redeem") {
+      const button = new ButtonBuilder()
+        .setCustomId("redeem_key_button")
+        .setLabel("Redeem Key")
+        .setEmoji("🔑")
+        .setStyle(ButtonStyle.Primary);
+
+      const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle("🔑 NEXORIAN.CC LICENSE")
+        .setDescription("Get your buyer role by pressing **Redeem Key** below and entering your license key.")
+        .setFooter({ text: "NEXORIAN.CC • License System" });
+
+      await interaction.channel.send({
+        embeds: [embed],
+        components: [new ActionRowBuilder().addComponents(button)]
+      });
+
+      return interaction.reply({
+        content: "✅ Redemption panel posted in this channel.",
+        ephemeral: true
+      });
+    }
+
     if (interaction.commandName === "generate-key") {
       const uses = interaction.options.getInteger("uses") || 1;
       const key = `NEX-${crypto.randomBytes(8).toString("hex").toUpperCase()}`;
@@ -114,6 +144,26 @@ client.on("interactionCreate", async interaction => {
         ephemeral: true
       });
     }
+  }
+
+  if (interaction.isButton() && interaction.customId === "redeem_key_button") {
+    const modal = new ModalBuilder()
+      .setCustomId("redeem_key_modal")
+      .setTitle("Enter License Key");
+
+    const keyInput = new TextInputBuilder()
+      .setCustomId("license_key")
+      .setLabel("License Key")
+      .setPlaceholder("Enter your license key")
+      .setStyle(TextInputStyle.Short)
+      .setRequired(true)
+      .setMaxLength(100);
+
+    modal.addComponents(
+      new ActionRowBuilder().addComponents(keyInput)
+    );
+
+    return interaction.showModal(modal);
   }
 
   if (interaction.isModalSubmit() && interaction.customId === "redeem_key_modal") {
